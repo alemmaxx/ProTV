@@ -28,3 +28,12 @@ SOURCE_BASE=<url playlist> ALLOW_HTTP=1 node scripts/build-channels.mjs
 
 APK ambil senarai siaran terkini dari laman GitHub Pages awak setiap kali dibuka, jadi tak perlu bina APK semula bila senarai berubah.
 Salinan senarai dalam APK hanya sandaran bila tiada internet ke Pages.
+
+## Sumber siaran dan tukar ganti automatik
+- Sumber 1: iptv-org. Sumber 2: Free-TV/IPTV (padanan negara ikut group-title: Malaysia, Indonesia, USA).
+  Channel yang sama dari dua sumber digabung, jadi satu channel boleh ada beberapa link.
+  Kalau satu link gagal, app terus cuba link seterusnya sebelum channel itu disembunyikan.
+- Link sendiri (kekal, dikongsi semua pengguna): letak fail `extra/my.m3u`, `extra/id.m3u` atau `extra/us.m3u` dalam repo
+  (format M3U biasa), kemudian Run workflow. Link itu turut diuji dan ditapis automatik.
+- Link sendiri (cepat, peranti ini sahaja): dalam app, buka "+ Tambah link sendiri". Disimpan dalam peranti.
+  Versi web hanya terima https; APK terima http juga.

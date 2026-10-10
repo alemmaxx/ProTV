@@ -86,6 +86,9 @@ select.field{max-width:46vw}
 .card .t span{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .empty{background:var(--paper);border:3px dashed var(--ink);border-radius:20px;padding:22px;text-align:center;grid-column:1/-1}
 
+.add{background:var(--paper);border:3px solid var(--ink);border-radius:16px;padding:8px 12px;margin-bottom:12px}
+.add summary{cursor:pointer;font-family:var(--display);font-weight:600;font-size:15px}
+.addbody{display:grid;gap:8px;margin-top:10px}
 .toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);transform:translateX(-50%);background:var(--ink);color:var(--ground);font-family:var(--display);font-weight:500;font-size:15px;padding:10px 16px;border-radius:14px;max-width:min(92vw,420px);text-align:center;z-index:20}
 .tab .n::after{content:' siaran'}
 @media(max-width:560px){
@@ -137,6 +140,15 @@ select.field{max-width:46vw}
   </section>
   <div class="stat mut sm" id="stat" aria-live="polite"></div>
 
+  <details class="add" id="add">
+    <summary>+ Tambah link sendiri (.m3u8)</summary>
+    <div class="addbody">
+      <input class="field" id="cn" type="text" placeholder="Nama saluran" autocomplete="off">
+      <input class="field" id="cu" type="url" placeholder="https://contoh.com/siaran.m3u8" autocomplete="off">
+      <button class="btn" id="cs" type="button">Simpan dalam senarai negara ini</button>
+    </div>
+  </details>
+
   <main class="cards" id="grid"></main>
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
@@ -165,6 +177,8 @@ if(!COUNTRIES.some(c => c.code === country)) country = 'MY';
 let bad = store.get('protv.bad', {});          // url -> masa (ms) sehingga disembunyikan
 let group = '';                                // kategori terpilih
 let current = null, curIdx = 0, loaded = false;
+let custom = store.get('protv.custom', []);     // link yang pengguna tambah sendiri (disimpan dalam peranti)
+const allCh = () => data.channels.concat(custom.map((c, i) => ({id:'cu-'+i, name:c.name, logo:'', group:'Link saya', country:c.country, urls:[{u:c.url, q:'', v:1}], verified:true, custom:true})));
 let hls = null, watchdog = null, detach = null, token = 0, skipRun = 0;
 const video = $('#v');
 
@@ -206,7 +220,7 @@ function parseM3U(text){
 }
 function cleanName(raw){
   let q = '';
-  let n = raw.replace(/\((\d{3,4}[pi])\)/gi, (_, v) => { q = v.toLowerCase(); return ''; });
+  let n = raw.replace(/[ⒼⓈⓎ]/g, '').replace(/\((\d{3,4}[pi])\)/gi, (_, v) => { q = v.toLowerCase(); return ''; });
   n = n.replace(/\[[^\]]*\]/g, '').replace(/\s{2,}/g, ' ').trim();
   return {name: n || raw, quality: q};
 }
@@ -249,7 +263,7 @@ async function loadData(){
 
 /* ---------- senarai ---------- */
 function countryList(){
-  return data.channels
+  return allCh()
     .filter(c => c.country === country && avail(c))
     .sort((a,b) => (b.verified?1:0) - (a.verified?1:0) || a.name.localeCompare(b.name));
 }
@@ -257,7 +271,7 @@ function visibleList(){
   const q = $('#q').value.trim().toLowerCase();
   return countryList().filter(c => (!group || c.group === group) && (!q || c.name.toLowerCase().includes(q)));
 }
-const hiddenCount = () => data.channels.filter(c => c.country === country && !avail(c)).length;
+const hiddenCount = () => allCh().filter(c => c.country === country && !avail(c)).length;
 
 function ago(iso){
   if(!iso) return 'senarai terus dari sumber';
@@ -272,7 +286,7 @@ function ago(iso){
 function renderTabs(){
   const box = $('#tabs'); box.textContent = '';
   for(const c of COUNTRIES){
-    const n = data.channels.filter(x => x.country === c.code && avail(x)).length;
+    const n = allCh().filter(x => x.country === c.code && avail(x)).length;
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'tab'; b.style.setProperty('--tc', c.color);
     b.setAttribute('aria-pressed', String(c.code === country));
@@ -332,8 +346,17 @@ function renderStat(){
   if(h){
     s.append(document.createTextNode(` · ${h} disembunyikan (link mati) `));
     const b = document.createElement('button'); b.type = 'button'; b.className = 'link'; b.textContent = 'Cuba semula';
-    b.onclick = () => { for(const c of data.channels) if(c.country === country) for(const x of c.urls) delete bad[x.u]; saveBad(); renderAll(); toast('Semua siaran dicuba semula'); };
+    b.onclick = () => { for(const c of allCh()) if(c.country === country) for(const x of c.urls) delete bad[x.u]; saveBad(); renderAll(); toast('Semua siaran dicuba semula'); };
     s.appendChild(b);
+  }
+  if(custom.some(c => c.country === country)){
+    s.append(document.createTextNode(' · '));
+    const d = document.createElement('button'); d.type = 'button'; d.className = 'link'; d.textContent = 'Padam link saya';
+    d.onclick = () => {
+      if(!confirm('Padam semua link yang awak tambah untuk negara ini?')) return;
+      custom = custom.filter(c => c.country !== country); store.set('protv.custom', custom); renderAll();
+    };
+    s.appendChild(d);
   }
 }
 function renderAll(){
@@ -452,6 +475,18 @@ $('#full').onclick = () => {
   const f = video.requestFullscreen || video.webkitRequestFullscreen || video.webkitEnterFullscreen || video.msRequestFullscreen;
   if(inApp || !f) return setPfs(true);
   f.call(video);
+};
+$('#cs').onclick = () => {
+  const name = $('#cn').value.trim(), url = $('#cu').value.trim();
+  if(!name || !url) return toast('Isi nama dan link dahulu');
+  let ok = false;
+  try{ const u = new URL(url); ok = u.protocol === 'https:' || (u.protocol === 'http:' && inApp); }catch{}
+  if(!ok) return toast(inApp ? 'Link tak sah' : 'Versi web hanya terima link https');
+  custom.push({name, url, country}); store.set('protv.custom', custom);
+  $('#cn').value = ''; $('#cu').value = ''; $('#add').open = false;
+  renderAll(); toast('Link disimpan');
+  const ch = allCh().find(c => c.custom && c.country === country && c.urls[0].u === url);
+  if(ch) play(ch);
 };
 $('#q').addEventListener('input', renderGrid);
 $('#g').addEventListener('change', e => { group = e.target.value; renderGrid(); });

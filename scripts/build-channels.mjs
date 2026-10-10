@@ -12,6 +12,17 @@ const ORIGIN = process.env.CHECK_ORIGIN
 const TIMEOUT_MS = 8000;
 const CONCURRENCY = 24;
 
+// Sumber tambahan: link dari sini jadi sandaran (alt) bagi channel yang sama, atau channel baru.
+// Free-TV guna group-title = nama negara. EXTRA_SOURCES_URL boleh override untuk ujian.
+const EXTRA_SOURCES = (process.env.EXTRA_SOURCES_URL
+  ? [process.env.EXTRA_SOURCES_URL]
+  : ['https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8']);
+const COUNTRY_MATCH = {
+  MY: /^\s*malaysia\s*$/i,
+  ID: /^\s*indonesia\s*$/i,
+  US: /^\s*(usa|us|united states( of america)?)\s*$/i,
+};
+
 const COUNTRIES = [
   { code: 'MY', name: 'Malaysia' },
   { code: 'ID', name: 'Indonesia' },
@@ -44,8 +55,8 @@ export function parseM3U(text) {
 
 export function cleanName(raw) {
   let q = '';
-  let geo = false;
-  let name = raw.replace(/\((\d{3,4}[pi])\)/gi, (_, v) => { q = v.toLowerCase(); return ''; });
+  let geo = /Ⓖ/.test(raw);
+  let name = raw.replace(/[ⒼⓈⓎ]/g, '').replace(/\((\d{3,4}[pi])\)/gi, (_, v) => { q = v.toLowerCase(); return ''; });
   name = name.replace(/\[([^\]]*)\]/g, (_, v) => { if (/geo/i.test(v)) geo = true; return ''; });
   name = name.replace(/\s{2,}/g, ' ').trim();
   return { name: name || raw, quality: q, geo };
@@ -110,11 +121,36 @@ async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-async function buildCountry({ code, name }) {
+export const normName = n => n.toLowerCase().replace(/\bhd\b/g, '').replace(/[^a-z0-9]+/g, '');
+
+async function loadExtra() {
+  const all = [];
+  for (const url of EXTRA_SOURCES) {
+    try {
+      const r = await fetchText(url, 30000);
+      if (r.ok) all.push(...parseM3U(r.body).map(e => ({ ...e, src: 'extra' })));
+      else console.error(`Sumber tambahan ${url} -> ${r.status}`);
+    } catch (err) { console.error(`Sumber tambahan gagal: ${url}`, String(err)); }
+  }
+  return all;
+}
+
+async function loadOwn(code) {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const txt = await readFile(`extra/${code.toLowerCase()}.m3u`, 'utf8');
+    return parseM3U(txt).map(e => ({ ...e, src: 'own' }));
+  } catch { return []; }
+}
+
+async function buildCountry({ code, name }, extraAll) {
   const url = `${SOURCE_BASE}/${code.toLowerCase()}.m3u`;
   const res = await fetchText(url, 30000);
   if (!res.ok) throw new Error(`Gagal ambil ${url} (${res.status})`);
-  let entries = parseM3U(res.body)
+  const main = parseM3U(res.body).map(e => ({ ...e, src: 'main' }));
+  const extra = extraAll.filter(e => COUNTRY_MATCH[code].test(e.attrs['group-title'] || ''));
+  const own = await loadOwn(code);
+  let entries = [...main, ...extra, ...own]
     .filter(e => (ALLOW_HTTP ? /^https?:\/\//i : /^https:\/\//i).test(e.url))
     .filter(e => !e.headers)
     .filter(e => /\.m3u8?(\?|$)/i.test(e.url) || e.url.includes('m3u8'));
@@ -134,21 +170,24 @@ async function buildCountry({ code, name }) {
   for (const c of checked) {
     // Gagal + bukan geo-block => buang. Gagal + geo-block => simpan (client akan cuba dari lokasi pengguna).
     if (!c.ok && !c.geo) { dropped++; continue; }
-    const key = (c.e.attrs['tvg-id'] || c.nm).toLowerCase();
+    const key = normName(c.nm);
+    const grp = c.e.src === 'main' ? ((c.e.attrs['group-title'] || '').split(';')[0] || 'Lain-lain') : 'Lain-lain';
     let ch = byKey.get(key);
+    if (ch && ch.group === 'Lain-lain' && grp !== 'Lain-lain') ch.group = grp;
+    if (ch && !ch.logo && c.e.attrs['tvg-logo']) ch.logo = c.e.attrs['tvg-logo'];
     if (!ch) {
       ch = {
         id: `${code.toLowerCase()}-${byKey.size}`,
         name: c.nm,
         logo: c.e.attrs['tvg-logo'] || '',
-        group: (c.e.attrs['group-title'] || 'Lain-lain').split(';')[0] || 'Lain-lain',
+        group: grp,
         country: code,
         urls: [],
         verified: false,
       };
       byKey.set(key, ch);
     }
-    ch.urls.push({ u: c.e.url, q: c.quality, v: c.ok ? 1 : 0 });
+    if (!ch.urls.some(x => x.u === c.e.url)) ch.urls.push({ u: c.e.url, q: c.quality, v: c.ok ? 1 : 0 });
     if (c.ok) ch.verified = true;
   }
   for (const ch of byKey.values()) ch.urls.sort((a, b) => b.v - a.v); // yang disahkan hidup dulu, susunan asal dikekalkan
@@ -160,8 +199,10 @@ async function buildCountry({ code, name }) {
 
 async function main() {
   const countries = [];
+  const extraAll = await loadExtra();
+  console.log(`Sumber tambahan: ${extraAll.length} entri`);
   for (const c of COUNTRIES) {
-    try { countries.push(await buildCountry(c)); }
+    try { countries.push(await buildCountry(c, extraAll)); }
     catch (err) { console.error(String(err)); }
   }
   const total = countries.reduce((s, c) => s + c.channels.length, 0);
