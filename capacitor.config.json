@@ -1,0 +1,7 @@
+{
+  "appId": "my.protv.app",
+  "appName": "proTV",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "allowMixedContent": true, "backgroundColor": "#FFF3C9" }
+}
